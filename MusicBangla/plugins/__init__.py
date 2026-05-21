@@ -1,1 +1,1 @@
-from . import start, play, controls, ping
+from . import start, play, controls, ping, mention, games  # noqa
