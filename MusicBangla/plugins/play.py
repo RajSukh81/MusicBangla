@@ -46,6 +46,8 @@ def download_audio(url: str) -> str:
         info = ydl.extract_info(url, download=True)
         path = ydl.prepare_filename(info)
         return path
+
+
 async def safe_react(client, message, emoji):
     try:
         await client.send_reaction(chat_id=message.chat.id, message_id=message.id, emoji=emoji)
@@ -70,7 +72,7 @@ async def play_cmd(client, message: Message):
         return await status.edit("❌ কোনো গান পাওয়া যায়নি। অন্য নাম দিয়ে চেষ্টা করুন।")
 
     await status.edit(f"📥 <b>ডাউনলোড হচ্ছে:</b>\n<code>{info['title']}</code>")
-  try:
+    try:
         loop = asyncio.get_event_loop()
         audio_path = await loop.run_in_executor(None, download_audio, info["link"])
     except Exception as e:
@@ -91,7 +93,8 @@ async def play_cmd(client, message: Message):
             "❌ Assistant অ্যাকাউন্ট গ্রুপে যোগ হতে পারেনি।\n\n"
             "🔧 Assistant অ্যাকাউন্টটি manually গ্রুপে add করুন, তারপর আবার <code>/play</code> দিন।"
         )
-      # VC join + stream
+
+    # VC join + stream
     try:
         await calls.play(message.chat.id, MediaStream(audio_path))
         ACTIVE_CHATS[message.chat.id] = info
@@ -113,7 +116,7 @@ async def play_cmd(client, message: Message):
         f"🙋 <b>অনুরোধকারী:</b> {message.from_user.mention}\n\n"
         f"▫️ ⏸ /pause  ▶️ /resume  ⏭ /skip  🛑 /stop"
     )
-await message.reply_photo(photo=info["thumb"], caption=caption)
+    await message.reply_photo(photo=info["thumb"], caption=caption)
 
     # Play sticker
     try:
@@ -121,4 +124,3 @@ await message.reply_photo(photo=info["thumb"], caption=caption)
         await message.reply_sticker(config.random_play_sticker())
     except Exception:
         pass
-      
