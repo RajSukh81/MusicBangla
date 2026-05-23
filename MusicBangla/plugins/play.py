@@ -33,7 +33,7 @@ COMMON_OPTS = {
 
 # Node.js আছে কিনা দেখো — yt-dlp EJS signature solving-এর জন্য
 if shutil.which("node"):
-    COMMON_OPTS["js_runtimes"] = "nodejs"
+    COMMON_OPTS["js_runtimes"] = {"nodejs": {}}
     LOGGER.info("✅ Node.js found — yt-dlp will use it for EJS")
 
 # cookies থাকলে যোগ করো
