@@ -1,6 +1,5 @@
 import os
 import asyncio
-import shutil
 import yt_dlp
 from pyrogram import filters
 from pyrogram.types import Message
@@ -11,6 +10,8 @@ import config
 from MusicBangla import app, assistant, calls, LOGGER
 
 # yt-dlp common options
+# js_runtimes ইচ্ছাকৃতভাবে সেট করা হয়নি — Heroku-তে EJS solver নেই,
+# yt-dlp নিজে থেকে android_vr client ব্যবহার করে যা JS ছাড়া কাজ করে
 COMMON_OPTS = {
     "quiet": True,
     "no_warnings": True,
@@ -30,11 +31,6 @@ COMMON_OPTS = {
         ),
     },
 }
-
-# Node.js আছে কিনা দেখো — yt-dlp EJS signature solving-এর জন্য
-if shutil.which("node"):
-    COMMON_OPTS["js_runtimes"] = {"nodejs": {}}
-    LOGGER.info("✅ Node.js found — yt-dlp will use it for EJS")
 
 # cookies থাকলে যোগ করো
 if os.path.exists("cookies.txt"):
