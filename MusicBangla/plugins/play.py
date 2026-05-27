@@ -109,18 +109,28 @@ def cleanup_downloads():
 
 def _soundcloud_search_and_get(query: str, video: bool):
     """
-    Search SoundCloud via yt-dlp scsearch and return stream info.
-    Returns (stream_url_or_path, info_dict) or (None, None).
-    SoundCloud is audio-only, video flag is ignored.
+    Search SoundCloud via yt-dlp scsearch and DOWNLOAD the file.
+    py-tgcalls cannot stream signed CloudFront URLs directly,
+    so we must download to a local file first.
+    Returns (local_file_path, info_dict) or (None, None).
     """
     LOGGER.info(f"SoundCloud search: {query}")
+    cleanup_downloads()
+
     opts = _base_opts()
     opts["format"] = "http_mp3_0_0/bestaudio/best"
     opts["default_search"] = "scsearch1"
+    opts["outtmpl"] = "downloads/sc_%(id)s.%(ext)s"
+    # Post-process to ensure consistent format for py-tgcalls
+    opts["postprocessors"] = [{
+        "key": "FFmpegExtractAudio",
+        "preferredcodec": "mp3",
+        "preferredquality": "128",
+    }]
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(f"scsearch1:{query}", download=False)
+            info = ydl.extract_info(f"scsearch1:{query}", download=True)
 
             # scsearch returns a playlist with entries
             if info.get("_type") == "playlist" and info.get("entries"):
@@ -138,28 +148,42 @@ def _soundcloud_search_and_get(query: str, video: bool):
             thumb = info.get("thumbnail", "")
             webpage = info.get("webpage_url", "")
 
-            # Get direct stream URL
-            stream_url = info.get("url")
-            if not stream_url:
-                # Try formats
-                fmts = info.get("formats", [])
-                # Prefer http_mp3 over hls
-                for f in fmts:
-                    fid = f.get("format_id", "")
-                    if "http_mp3" in fid and f.get("url"):
-                        stream_url = f["url"]
-                        LOGGER.info(f"SoundCloud: using format {fid}")
-                        break
-                if not stream_url:
-                    for f in fmts:
-                        if f.get("url"):
-                            stream_url = f["url"]
-                            LOGGER.info(f"SoundCloud: using format {f.get('format_id')}")
-                            break
+            # Find the downloaded file
+            track_id = info.get("id", "unknown")
+            local_path = None
 
-            if stream_url:
-                LOGGER.info(f"SoundCloud SUCCESS: {title}")
-                return stream_url, {
+            # Check multiple possible extensions
+            for ext in [".mp3", ".m4a", ".webm", ".opus", ".ogg", ".wav"]:
+                candidate = f"downloads/sc_{track_id}{ext}"
+                if os.path.exists(candidate):
+                    local_path = candidate
+                    break
+
+            # Also try the prepared filename
+            if not local_path:
+                try:
+                    fname = ydl.prepare_filename(info)
+                    base = os.path.splitext(fname)[0]
+                    for ext in [".mp3", ".m4a", ".webm", ".opus", ".ogg"]:
+                        if os.path.exists(base + ext):
+                            local_path = base + ext
+                            break
+                    if not local_path and os.path.exists(fname):
+                        local_path = fname
+                except Exception:
+                    pass
+
+            # Last resort: find any file in downloads
+            if not local_path:
+                for f in os.listdir("downloads"):
+                    if f.startswith("sc_"):
+                        local_path = os.path.join("downloads", f)
+                        break
+
+            if local_path and os.path.exists(local_path):
+                fsize = os.path.getsize(local_path)
+                LOGGER.info(f"SoundCloud DOWNLOADED: {title} -> {local_path} ({fsize} bytes)")
+                return local_path, {
                     "title": title,
                     "duration": int(duration) if duration else 0,
                     "channel": uploader,
@@ -168,7 +192,7 @@ def _soundcloud_search_and_get(query: str, video: bool):
                     "source": "SoundCloud",
                 }
 
-            LOGGER.warning("SoundCloud: found track but no stream URL")
+            LOGGER.warning("SoundCloud: download succeeded but file not found")
             return None, None
 
     except Exception as e:
@@ -188,8 +212,8 @@ _JIOSAAVN_APIS = [
 
 def _jiosaavn_search_and_get(query: str, video: bool):
     """
-    Search JioSaavn via public API and return stream info.
-    Returns (stream_url_or_path, info_dict) or (None, None).
+    Search JioSaavn via public API and download the track.
+    Returns (local_file_path, info_dict) or (None, None).
     """
     LOGGER.info(f"JioSaavn search: {query}")
 
@@ -208,7 +232,6 @@ def _jiosaavn_search_and_get(query: str, video: bool):
                     LOGGER.warning(f"JioSaavn {api_base}: no results")
                     continue
 
-                # Get first result
                 song = results[0] if isinstance(results, list) else None
                 if not song:
                     continue
@@ -228,19 +251,15 @@ def _jiosaavn_search_and_get(query: str, video: bool):
                 song_data = resp2.json()
 
                 # Extract media URL
-                media_url = song_data.get("media_url", "")
                 media_urls = song_data.get("media_urls", {})
-
-                # Prefer 320kbps > 160kbps > 96kbps
                 stream_url = None
                 for quality in ["320_KBPS", "160_KBPS", "96_KBPS"]:
                     if media_urls.get(quality):
                         stream_url = media_urls[quality]
                         LOGGER.info(f"JioSaavn: got {quality}")
                         break
-
                 if not stream_url:
-                    stream_url = media_url
+                    stream_url = song_data.get("media_url", "")
 
                 if not stream_url:
                     LOGGER.warning(f"JioSaavn {api_base}: no media URL")
@@ -262,15 +281,27 @@ def _jiosaavn_search_and_get(query: str, video: bool):
                 if isinstance(image, list) and image:
                     image = image[-1].get("link", "") if isinstance(image[-1], dict) else image[-1]
 
-                LOGGER.info(f"JioSaavn SUCCESS: {title}")
-                return stream_url, {
-                    "title": title,
-                    "duration": duration,
-                    "channel": artist,
-                    "thumb": image,
-                    "link": song_data.get("perma_url", ""),
-                    "source": "JioSaavn",
-                }
+                # Download the file for py-tgcalls
+                local_path = f"downloads/jiosaavn_{song_id}.mp4"
+                try:
+                    LOGGER.info(f"JioSaavn downloading: {stream_url[:80]}...")
+                    dl_resp = client.get(stream_url, timeout=30)
+                    if dl_resp.status_code == 200 and len(dl_resp.content) > 1000:
+                        with open(local_path, "wb") as f:
+                            f.write(dl_resp.content)
+                        LOGGER.info(f"JioSaavn DOWNLOADED: {title} -> {local_path} ({len(dl_resp.content)} bytes)")
+                        return local_path, {
+                            "title": title,
+                            "duration": duration,
+                            "channel": artist,
+                            "thumb": image,
+                            "link": song_data.get("perma_url", ""),
+                            "source": "JioSaavn",
+                        }
+                    else:
+                        LOGGER.warning(f"JioSaavn download failed: HTTP {dl_resp.status_code}, size={len(dl_resp.content)}")
+                except Exception as e:
+                    LOGGER.warning(f"JioSaavn download error: {str(e)[:60]}")
 
         except Exception as e:
             LOGGER.warning(f"JioSaavn {api_base} error: {str(e)[:80]}")
