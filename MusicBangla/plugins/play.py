@@ -23,9 +23,22 @@ _GLOBAL_SPAM = {}
 _MAX_CONCURRENT = 3  # max concurrent plays
 
 # --- Cookies ---
-_COOKIE_FILE = "cookies.txt" if os.path.exists("cookies.txt") else None
-if _COOKIE_FILE:
-    LOGGER.info("cookies.txt loaded for yt-dlp")
+# Write YT_COOKIES env var to file if it exists (for Heroku deployments)
+_COOKIE_FILE = None
+if os.environ.get("YT_COOKIES"):
+    try:
+        with open("cookies.txt", "w") as f:
+            f.write(os.environ["YT_COOKIES"])
+        _COOKIE_FILE = "cookies.txt"
+        LOGGER.info("cookies.txt written from YT_COOKIES env var")
+    except Exception as e:
+        LOGGER.error(f"Failed to write cookies.txt from env: {e}")
+elif os.path.exists("cookies.txt"):
+    _COOKIE_FILE = "cookies.txt"
+    LOGGER.info("cookies.txt loaded from file")
+
+if not _COOKIE_FILE:
+    LOGGER.warning("No YouTube cookies available — playback may fail!")
 
 
 # =====================================================
@@ -39,14 +52,15 @@ def _base_opts():
         "no_warnings": True,
         "noplaylist": True,
         "socket_timeout": 15,
-        "retries": 3,
-        "fragment_retries": 3,
+        "retries": 5,
+        "fragment_retries": 5,
         "geo_bypass": True,
         "nocheckcertificate": True,
         "no_check_formats": True,
+        "check_formats": False,
         "source_address": "0.0.0.0",
-        # Force yt-dlp to not check format availability
         "format_sort": ["abr", "asr"],
+        "extractor_args": {"youtube": {"player_skip": ["configs"]}},
     }
     if _COOKIE_FILE:
         opts["cookiefile"] = _COOKIE_FILE
@@ -56,24 +70,27 @@ def _base_opts():
 # Ordered list of (format_string, player_client, description)
 # Each is tried in order. First success wins.
 _STRATEGIES = [
-    # --- Phase 1: android_vr bypasses PO token (most reliable in 2025-2026) ---
-    ("bestaudio/best", ["android_vr"], "android_vr+bestaudio"),
-    ("best", ["android_vr"], "android_vr+best"),
+    # --- Phase 1: web_creator with cookies (most reliable mid-2026) ---
+    ("bestaudio/best", ["web_creator"], "web_creator+bestaudio"),
+    ("best", ["web_creator"], "web_creator+best"),
 
-    # --- Phase 2: tv_embedded also bypasses PO token ---
-    ("bestaudio/best", ["tv_embedded"], "tv_embedded+bestaudio"),
-    ("best", ["tv_embedded"], "tv_embedded+best"),
+    # --- Phase 2: mweb client ---
+    ("bestaudio/best", ["mweb"], "mweb+bestaudio"),
+    ("best", ["mweb"], "mweb+best"),
 
-    # --- Phase 3: mediaconnect (newer client) ---
-    ("bestaudio/best", ["mediaconnect"], "mediaconnect+bestaudio"),
+    # --- Phase 3: ios client ---
+    ("bestaudio/best", ["ios"], "ios+bestaudio"),
 
-    # --- Phase 4: standard clients with cookies ---
+    # --- Phase 4: web + default with cookies ---
     ("bestaudio/best", ["web"], "web+bestaudio"),
-    ("bestaudio/best", ["android"], "android+bestaudio"),
     ("bestaudio/best", None, "default+bestaudio"),
 
-    # --- Phase 5: absolute fallback ---
-    ("worst", ["android_vr"], "android_vr+worst"),
+    # --- Phase 5: android fallbacks ---
+    ("bestaudio/best", ["android"], "android+bestaudio"),
+    ("best", ["android"], "android+best"),
+
+    # --- Phase 6: absolute fallback ---
+    ("worst", ["web_creator"], "web_creator+worst"),
     ("worst", None, "default+worst"),
 ]
 
@@ -250,7 +267,9 @@ def _ytdlp_get_url(url: str, video: bool) -> str:
         opts = _base_opts()
         opts["format"] = fmt_str
         if player_client:
-            opts["extractor_args"] = {"youtube": {"player_client": player_client}}
+            yt_args = opts.get("extractor_args", {}).get("youtube", {}).copy()
+            yt_args["player_client"] = player_client
+            opts["extractor_args"] = {"youtube": yt_args}
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -295,9 +314,10 @@ def _ytdlp_download(url: str, video: bool) -> str:
 
     # Only try the most reliable strategies for download
     download_strats = [
-        ("bestaudio/best", ["android_vr"], "dl:android_vr"),
-        ("bestaudio/best", ["tv_embedded"], "dl:tv_embedded"),
-        ("best", ["android_vr"], "dl:android_vr+best"),
+        ("bestaudio/best", ["web_creator"], "dl:web_creator"),
+        ("bestaudio/best", ["mweb"], "dl:mweb"),
+        ("bestaudio/best", ["ios"], "dl:ios"),
+        ("best", ["web_creator"], "dl:web_creator+best"),
         ("best", None, "dl:default"),
     ]
 
@@ -307,7 +327,9 @@ def _ytdlp_download(url: str, video: bool) -> str:
         opts["format"] = fmt_str
         opts["outtmpl"] = outtmpl
         if player_client:
-            opts["extractor_args"] = {"youtube": {"player_client": player_client}}
+            yt_args = opts.get("extractor_args", {}).get("youtube", {}).copy()
+            yt_args["player_client"] = player_client
+            opts["extractor_args"] = {"youtube": yt_args}
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
